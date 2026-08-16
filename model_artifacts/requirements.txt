@@ -1,0 +1,7 @@
+tensorflow==2.18.0
+pandas==2.2.2
+numpy==2.0.2
+fastapi==0.115.0
+pydantic==2.9.2
+pyvi==0.1.1
+uvicorn[standard]==0.32.0
