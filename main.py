@@ -5,6 +5,7 @@ from contextlib import asynccontextmanager
 import numpy as np
 import pandas as pd
 import tensorflow as tf
+from keras.src.legacy.saving import legacy_h5_format
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field
 from pyvi import ViTokenizer
@@ -27,9 +28,12 @@ artifacts = {}
 async def lifespan(app: FastAPI):
     """Load model và artifacts khi ứng dụng khởi chạy."""
     try:
-        artifacts["model"] = tf.keras.models.load_model(
-            MODEL_DIR / "cnn_model.h5", compile=False
+        # Sử dụng legacy_h5_format để bỏ qua xung đột quantization_config của Keras 3
+        model_path = MODEL_DIR / "cnn_model.h5"
+        artifacts["model"] = legacy_h5_format.load_model_from_hdf5(
+            str(model_path), custom_objects=None, compile=False
         )
+        
         with open(MODEL_DIR / "tokenizer.pkl", "rb") as f:
             artifacts["tokenizer"] = pickle.load(f)
 
