@@ -52,12 +52,12 @@ async def lifespan(app: FastAPI):
         model.load_weights(weights_path)
 
         # 2. Load Tokenizer
-        tokenizer_path = os.path.join(MODEL_DIR, "tokenizer.pickle")
+        tokenizer_path = os.path.join(MODEL_DIR, "tokenizer.pkl")
         with open(tokenizer_path, "rb") as file:
             tokenizer = pickle.load(file)
 
         # 3. Load Label Map
-        label_map_path = os.path.join(MODEL_DIR, "label_map.pickle")
+        label_map_path = os.path.join(MODEL_DIR, "label_map.pkl")
         with open(label_map_path, "rb") as file:
             index_to_label = pickle.load(file)
 
