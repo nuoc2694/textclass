@@ -1,116 +1,118 @@
-import pickle
-from pathlib import Path
+from fastapi import FastAPI, HTTPException
+from pydantic import BaseModel
 from contextlib import asynccontextmanager
 
-import numpy as np
-import pandas as pd
 import tensorflow as tf
-from keras.src.legacy.saving import legacy_h5_format
-from fastapi import FastAPI, HTTPException
-from pydantic import BaseModel, Field
+import pickle
+import pandas as pd
+import numpy as np
 from pyvi import ViTokenizer
 from tensorflow.keras.preprocessing.sequence import pad_sequences
 
-# ======================
-# Constants & Paths
-# ======================
 MAX_SEQ_LEN = 300
-BASE_DIR = Path(__file__).resolve().parent
-MODEL_DIR = BASE_DIR / "model_artifacts"
+MODEL_DIR = "model_artifacts"
 
-# Global dictionary lưu trữ các tài nguyên nặng
-artifacts = {}
+# Khai báo các biến toàn cục lưu trữ mô hình
+model = None
+tokenizer = None
+index_to_label = None
+rules = None
 
-# ======================
-# Lifespan Management
-# ======================
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Load model và artifacts khi ứng dụng khởi chạy."""
+    # Khởi tạo và load mô hình khi API bắt đầu chạy
+    global model, tokenizer, index_to_label, rules
+    print("Đang load mô hình và các artifacts...")
+    
     try:
-        # Sử dụng legacy_h5_format để bỏ qua xung đột quantization_config của Keras 3
-        model_path = MODEL_DIR / "cnn_model.h5"
-        artifacts["model"] = legacy_h5_format.load_model_from_hdf5(
-            str(model_path), custom_objects=None, compile=False
-        )
+        model = tf.keras.models.load_model(f"{MODEL_DIR}/cnn_model.h5", compile=False)
         
-        with open(MODEL_DIR / "tokenizer.pkl", "rb") as f:
-            artifacts["tokenizer"] = pickle.load(f)
-
-        with open(MODEL_DIR / "label_map.pkl", "rb") as f:
-            artifacts["index_to_label"] = pickle.load(f)
-
-        artifacts["rules"] = pd.read_pickle(MODEL_DIR / "apriori_rules.pkl")
-        print("Successfully loaded all model artifacts.")
+        with open(f"{MODEL_DIR}/tokenizer.pickle", "rb") as file:
+            tokenizer = pickle.load(file)
+            
+        with open(f"{MODEL_DIR}/label_map.pickle", "rb") as file:
+            index_to_label = pickle.load(file)
+            
+        rules = pd.read_pickle(f"{MODEL_DIR}/apriori_rules.pkl")
+        print("Load thành công! Sẵn sàng nhận requests.")
     except Exception as e:
-        print(f"Error loading model artifacts: {e}")
+        print(f"Lỗi khi load mô hình: {e}")
         raise e
+        
+    yield 
+    # Logic dọn dẹp bộ nhớ khi tắt server (nếu cần thiết) có thể viết ở đây
+    print("Đang tắt dịch vụ API...")
 
-    yield
+# Khởi tạo ứng dụng FastAPI với lifespan context
+app = FastAPI(title="Text Classification API", lifespan=lifespan)
 
-    # Clean up khi ứng dụng dừng
-    artifacts.clear()
+# Định nghĩa cấu trúc dữ liệu đầu vào (Input)
+class TextInput(BaseModel):
+    text: str
 
-# ======================
-# Inference Logic
-# ======================
-def predict_text(text: str) -> dict:
-    tokenizer = artifacts["tokenizer"]
-    model = artifacts["model"]
-    index_to_label = artifacts["index_to_label"]
-    rules = artifacts["rules"]
-
-    # Preprocess
-    tokenized_text = ViTokenizer.tokenize(text.lower())
-    seq = tokenizer.texts_to_sequences([tokenized_text])
-    pad = pad_sequences(
-        seq, maxlen=MAX_SEQ_LEN, padding="post", truncating="post"
-    )
-
-    # Fast TensorFlow inference
-    predictions = model(pad, training=False)
-    probs = predictions.numpy()[0]
-
-    cnn_idx = int(np.argmax(probs))
-    cnn_label = index_to_label[cnn_idx]
-    cnn_conf = float(probs[cnn_idx])
-
-    # Rule-based Fallback (Apriori)
-    if cnn_conf < 0.85:
-        words = set(tokenized_text.split())
-        for _, row in rules.iterrows():
-            if set(row["antecedents"]).issubset(words):
-                rule_label = list(row["consequents"])[0].replace("L__", "")
-                if row["confidence"] > 0.9:
-                    return {
-                        "label": rule_label,
-                        "method": "Apriori",
-                        "confidence": float(row["confidence"]),
-                    }
-
-    return {"label": cnn_label, "method": "CNN", "confidence": cnn_conf}
-
-# ======================
-# FastAPI App & Schemas
-# ======================
-app = FastAPI(title="Text Classification Service", lifespan=lifespan)
-
-class NewsRequest(BaseModel):
-    text: str = Field(..., min_length=1, example="Thủ tướng phát biểu tại hội nghị kinh tế.")
-
-class NewsResponse(BaseModel):
+# Định nghĩa cấu trúc dữ liệu trả về (Output)
+class PredictionOutput(BaseModel):
     label: str
     method: str
     confidence: float
+    cnn_label: str
+    cnn_confidence: float
+    processed_text: str
 
-@app.get("/health")
-def health_check():
-    """Endpoint kiểm tra trạng thái dịch vụ."""
-    return {"status": "ok", "model_loaded": "model" in artifacts}
-
-@app.post("/predict", response_model=NewsResponse)
-def predict(request: NewsRequest):
-    if not request.text.strip():
-        raise HTTPException(status_code=400, detail="Text standard cannot be empty.")
+def predict_hybrid_with_score(text: str):
+    """Logic dự đoán gốc của bạn được giữ nguyên"""
+    processed_text = ViTokenizer.tokenize(text.lower())
+    sequence = tokenizer.texts_to_sequences([processed_text])
+    padded = pad_sequences(sequence, maxlen=MAX_SEQ_LEN, padding="post", truncating="post")
     
-    return predict_text(request.text)
+    probabilities = model.predict(padded, verbose=0)[0]
+    
+    cnn_idx = int(np.argmax(probabilities))
+    cnn_conf = float(probabilities[cnn_idx])
+    cnn_label = index_to_label[cnn_idx]
+    
+    final_label = cnn_label
+    final_conf = cnn_conf
+    method = "CNN"
+    
+    # Apriori Fallback
+    if cnn_conf < 0.85 and not rules.empty:
+        words = set(processed_text.split())
+        best_rule_conf = 0.0
+        rule_label = None
+        
+        for _, row in rules.iterrows():
+            antecedents = set(row["antecedents"])
+            if antecedents and antecedents.issubset(words):
+                rule_conf = float(row["confidence"])
+                if rule_conf > best_rule_conf:
+                    consequents = list(row["consequents"])
+                    if len(consequents) == 1:
+                        best_rule_conf = rule_conf
+                        rule_label = consequents[0].replace("L__", "")
+                        
+        if rule_label is not None and (best_rule_conf > 0.9 or best_rule_conf > cnn_conf + 0.2):
+            final_label = rule_label
+            final_conf = best_rule_conf
+            method = "Apriori"
+            
+    return {
+        "label": final_label,
+        "method": method,
+        "confidence": final_conf,
+        "cnn_label": cnn_label,
+        "cnn_confidence": cnn_conf,
+        "processed_text": processed_text
+    }
+
+# Thiết lập Endpoint nhận yêu cầu POST
+@app.post("/predict", response_model=PredictionOutput)
+async def predict_text(request: TextInput):
+    if not request.text or request.text.strip() == "":
+        raise HTTPException(status_code=400, detail="Văn bản truyền vào không được để trống")
+    
+    try:
+        result = predict_hybrid_with_score(request.text)
+        return result
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
