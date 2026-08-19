@@ -10,6 +10,8 @@ from pydantic import BaseModel
 from pyvi import ViTokenizer
 from tensorflow.keras import layers, models
 from tensorflow.keras.preprocessing.sequence import pad_sequences
+from fastapi import FastAPI, HTTPException
+from fastapi.responses import HTMLResponse
 
 # Các hằng số cấu hình
 MAX_SEQ_LEN = 300
@@ -147,6 +149,60 @@ def predict_hybrid_with_score(text: str):
         "processed_text": processed_text,
     }
 
+@app.get("/", response_class=HTMLResponse)
+async def home_page():
+    return """
+    <!DOCTYPE html>
+    <html lang="vi">
+    <head>
+        <meta charset="UTF-8">
+        <title>Demo Phân Loại Văn Bản</title>
+        <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    </head>
+    <body class="bg-light p-4">
+        <div class="container card shadow p-4" style="max-width: 650px; margin-top: 50px;">
+            <h3 class="card-title text-primary text-center mb-4">Hệ Thống Phân Loại Văn Bản</h3>
+            <div class="mb-3">
+                <label class="form-label font-weight-bold">Nhập đoạn văn bản cần phân loại:</label>
+                <textarea id="inputText" class="form-control" rows="4" placeholder="Ví dụ: Trường Đại học Bách khoa công bố điểm chuẩn..."></textarea>
+            </div>
+            <button onclick="sendPrediction()" class="btn btn-primary w-100">Phân Loại Ngay</button>
+            
+            <div id="resultBox" class="mt-4 p-3 bg-white rounded border d-none">
+                <h5 class="text-success mb-3">Kết quả dự đoán:</h5>
+                <p><strong>Nhãn dự đoán:</strong> <span id="resLabel" class="badge bg-danger fs-6"></span></p>
+                <p><strong>Phương pháp sử dụng:</strong> <span id="resMethod" class="badge bg-secondary"></span></p>
+                <p><strong>Độ tin cậy:</strong> <span id="resConf"></span>%</p>
+                <p><strong>Văn bản đã tách từ:</strong> <em id="resProcessed" class="text-muted"></em></p>
+            </div>
+        </div>
+
+        <script>
+            async function sendPrediction() {
+                const text = document.getElementById('inputText').value;
+                if (!text.trim()) return alert('Vui lòng nhập văn bản!');
+
+                const res = await fetch('/predict', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({text: text})
+                });
+
+                if (res.ok) {
+                    const data = await res.json();
+                    document.getElementById('resLabel').innerText = data.label;
+                    document.getElementById('resMethod').innerText = data.method;
+                    document.getElementById('resConf').innerText = (data.confidence * 100).toFixed(2);
+                    document.getElementById('resProcessed').innerText = data.processed_text;
+                    document.getElementById('resultBox').classList.remove('d-none');
+                } else {
+                    alert('Có lỗi xảy ra khi xử lý dữ liệu.');
+                }
+            }
+        </script>
+    </body>
+    </html>
+    """
 
 @app.post("/predict", response_model=PredictionOutput)
 async def predict_text(request: TextInput):
