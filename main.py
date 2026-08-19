@@ -25,7 +25,7 @@ async def lifespan(app: FastAPI):
     print("Đang load mô hình và các artifacts...")
     
     try:
-        model = tf.keras.models.load_model(f"{MODEL_DIR}/cnn_model.h5", compile=False)
+        model = tf.keras.models.load_model(f"{MODEL_DIR}/cnn_model.keras", compile=False)
         
         with open(f"{MODEL_DIR}/tokenizer.pickle", "rb") as file:
             tokenizer = pickle.load(file)
